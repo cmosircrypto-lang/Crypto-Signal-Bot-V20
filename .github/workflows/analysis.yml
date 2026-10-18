@@ -1,0 +1,43 @@
+name: Crypto Signal Bot
+
+on:
+  # schedule:
+  #   - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run analysis
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TOOBIT_API_KEY: ${{ secrets.TOOBIT_API_KEY }}
+          TOOBIT_SECRET: ${{ secrets.TOOBIT_SECRET }}
+        run: python main.py
+
+      - name: Commit heartbeat IDs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add server_messages.json || true
+          git add last_signals.json || true
+          git diff --quiet && git diff --staged --quiet || (
+            git commit -m "Update heartbeat and signals [skip ci]" 
+            git pull --rebase origin main -X ours
+            git push
+          )
