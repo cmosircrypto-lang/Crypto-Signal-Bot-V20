@@ -23,11 +23,10 @@ SYMBOLS = [
     "INJ-SWAP-USDT"
 ]
 
-# نام فایل‌ها با پسوند v20 برای جلوگیری از تداخل با ریپازیتوری اصلی
 HEARTBEAT_FILE = "server_messages_v20.json" 
 SIGNALS_FILE = "last_signals_v20.json" 
 MAX_HEARTBEATS = 4
-MAX_SIGNALS_PER_CYCLE = 3  # حداکثر تعداد سیگنال در هر چرخه
+MAX_SIGNALS_PER_CYCLE = 3
 
 # --- ابزارهای عمومی ---
 def get_iran_time():
@@ -69,7 +68,7 @@ def save_heartbeat_ids(ids):
 
 def send_heartbeat():
     date_gregorian, date_jalali, time_str = get_iran_time()
-    msg = f"""🖥️ [V20] سرور آنلاین
+    msg = f"""🖥️ [V20] سرور آنلاین (Price Action)
 ━━━━━━━━━━━━━━━━━
 📅 تاریخ شمسی: {date_jalali}
 📅 تاریخ میلادی: {date_gregorian}
@@ -78,7 +77,6 @@ def send_heartbeat():
 
     ids = load_heartbeat_ids()
     new_id = send_telegram(msg)
-
     if new_id:
         ids.append(new_id)
         while len(ids) > MAX_HEARTBEATS:
@@ -86,7 +84,7 @@ def send_heartbeat():
             delete_telegram(old_id)
         save_heartbeat_ids(ids)
 
-# --- مدیریت معاملات باز و بسته ---
+# --- مدیریت معاملات ---
 def load_signals():
     try:
         with open(SIGNALS_FILE, "r") as f:
@@ -108,12 +106,10 @@ def update_open_trades(exchange):
             try:
                 ticker = exchange.fetch_ticker(symbol)
                 current_price = ticker['last']
-                
                 entry = data['entry']
                 tp = data['tp']
                 sl = data['sl']
                 direction = data['direction']
-                
                 result = None
                 
                 if direction == "LONG":
@@ -127,10 +123,8 @@ def update_open_trades(exchange):
                     signals[symbol]['status'] = "CLOSED"
                     signals[symbol]['result'] = result
                     updated = True
-                    
                     emoji = "🎯" if result == "TP" else "🛑"
                     title = "حد سود (TP) لمس شد" if result == "TP" else "حد ضرر (SL) لمس شد"
-
                     print(f"{emoji} {symbol} {direction} hit {result} at {current_price}")
                     
                     close_msg = f"""{emoji} [V20] بسته شدن معامله
@@ -146,127 +140,112 @@ def update_open_trades(exchange):
 ⏰ ساعت: {time_str}
 ━━━━━━━━━━━━━━━━━"""
                     send_telegram(close_msg)
-
             except Exception as e:
                 print(f"⚠️ خطا در بررسی {symbol}: {e}")
                 continue
-                
-    if updated:
-        save_signals(signals)
+    if updated: save_signals(signals)
 
 # --- داده و تحلیل ---
 def create_exchange():
-    return ccxt.toobit({
-        'apiKey': TOOBIT_API_KEY,
-        'secret': TOOBIT_SECRET,
-        'enableRateLimit': True,
-    })
+    return ccxt.toobit({'apiKey': TOOBIT_API_KEY, 'secret': TOOBIT_SECRET, 'enableRateLimit': True})
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=100):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    return df
+    return pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-def calculate_indicators(df):
-    df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
-    df['ema21'] = df['close'].ewm(span=21, adjust=False).mean()
-
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-
+def calculate_atr(df):
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(window=14).mean()
-
     return df
 
-def get_btc_1h_trend(exchange):
-    """روند بیت‌کوین در تایم 1 ساعته را برمی‌گرداند"""
+def get_btc_trend(exchange):
     try:
-        df_btc = fetch_ohlcv(exchange, "BTC-SWAP-USDT", '1h', 100)
-        df_btc = calculate_indicators(df_btc)
-        last_btc = df_btc.iloc[-1]
+        df_4h = fetch_ohlcv(exchange, "BTC-SWAP-USDT", '4h', 100)
+        df_4h['ema9'] = df_4h['close'].ewm(span=9, adjust=False).mean()
+        df_4h['ema21'] = df_4h['close'].ewm(span=21, adjust=False).mean()
+        last_4h = df_4h.iloc[-1]
         
-        if last_btc['ema9'] > last_btc['ema21']:
-            return "LONG"
-        elif last_btc['ema9'] < last_btc['ema21']:
-            return "SHORT"
-        else:
-            return "NONE"
+        df_1h = fetch_ohlcv(exchange, "BTC-SWAP-USDT", '1h', 100)
+        df_1h['ema9'] = df_1h['close'].ewm(span=9, adjust=False).mean()
+        df_1h['ema21'] = df_1h['close'].ewm(span=21, adjust=False).mean()
+        last_1h = df_1h.iloc[-1]
+
+        trend_4h = "LONG" if last_4h['ema9'] > last_4h['ema21'] else "SHORT" if last_4h['ema9'] < last_4h['ema21'] else "NONE"
+        trend_1h = "LONG" if last_1h['ema9'] > last_1h['ema21'] else "SHORT" if last_1h['ema9'] < last_1h['ema21'] else "NONE"
+        
+        return trend_4h, trend_1h
     except Exception as e:
         print(f"⚠️ خطا در دریافت روند بیت‌کوین: {e}")
-        return "UNKNOWN"
+        return "UNKNOWN", "UNKNOWN"
 
 def analyze(symbol, exchange):
-    # تایم 1 ساعته برای تشخیص کراس و روند
-    df_1h = fetch_ohlcv(exchange, symbol, '1h', 100)
-    df_1h = calculate_indicators(df_1h)
-    last_1h = df_1h.iloc[-1]
-    prev_1h = df_1h.iloc[-2]
+    df_4h = fetch_ohlcv(exchange, symbol, '4h', 100)
+    df_4h['ema9'] = df_4h['close'].ewm(span=9, adjust=False).mean()
+    df_4h['ema21'] = df_4h['close'].ewm(span=21, adjust=False).mean()
+    last_4h = df_4h.iloc[-1]
 
-    # تایم 15 دقیقه برای تایید روند و پیدا کردن نقطه پولبک
     df_15m = fetch_ohlcv(exchange, symbol, '15m', 100)
-    df_15m = calculate_indicators(df_15m)
-    last_15m = df_15m.iloc[-1]
-
-    current_price = last_15m['close']
-    ema9_15m = last_15m['ema9']
-    atr = last_15m['atr']
-
-    # شرط کراس در تایم 1 ساعته (لحظه کراس)
-    cross_long_1h = (prev_1h['ema9'] <= prev_1h['ema21']) and (last_1h['ema9'] > last_1h['ema21'])
-    cross_short_1h = (prev_1h['ema9'] >= prev_1h['ema21']) and (last_1h['ema9'] < last_1h['ema21'])
+    df_15m = calculate_atr(df_15m)
     
-    # تایید روند در تایم 1 ساعته
-    trend_long_1h = last_1h['ema9'] > last_1h['ema21']
-    trend_short_1h = last_1h['ema9'] < last_1h['ema21']
+    last = df_15m.iloc[-1]
+    prev = df_15m.iloc[-2]
+    
+    entry_price = last['close']
+    atr = last['atr']
 
-    # تایید روند در تایم 15 دقیقه
-    trend_long_15m = last_15m['ema9'] > last_15m['ema21']
-    trend_short_15m = last_15m['ema9'] < last_15m['ema21']
+    # تشخیص روند 4 ساعته (برای تاییدیه)
+    trend_long_4h = last_4h['ema9'] > last_4h['ema21']
+    trend_short_4h = last_4h['ema9'] < last_4h['ema21']
 
-    print(f"  [DEBUG 1H] Cross LONG: {cross_long_1h} | Cross SHORT: {cross_short_1h} | Trend: {'LONG' if trend_long_1h else 'SHORT'}")
-    print(f"  [DEBUG 15m] EMA9: {ema9_15m:.4f} | Price: {current_price:.4f} | Trend: {'LONG' if trend_long_15m else 'SHORT'}")
+    # محاسبه اندازه بدنه و سایه‌ها
+    body_size = abs(last['close'] - last['open'])
+    upper_wick = last['high'] - max(last['close'], last['open'])
+    lower_wick = min(last['close'], last['open']) - last['low']
+    
+    # 1. الگوهای کندلی
+    is_strong_bullish = (last['close'] > last['open']) and (body_size > (upper_wick + lower_wick) * 1.5)
+    is_strong_bearish = (last['close'] < last['open']) and (body_size > (upper_wick + lower_wick) * 1.5)
+    
+    bullish_engulfing = (prev['close'] < prev['open']) and (last['close'] > last['open']) and (last['close'] > prev['open']) and (last['open'] < prev['close'])
+    bearish_engulfing = (prev['close'] > prev['open']) and (last['close'] < last['open']) and (last['close'] < prev['open']) and (last['open'] > prev['close'])
+    
+    hammer = (lower_wick > body_size * 2) and (upper_wick < body_size * 0.5)
+    shooting_star = (upper_wick > body_size * 2) and (lower_wick < body_size * 0.5)
+
+    print(f"  [DEBUG 4H] Trend: {'LONG' if trend_long_4h else 'SHORT'}")
+    print(f"  [DEBUG 15m] BullEngulf: {bullish_engulfing} | BearEngulf: {bearish_engulfing} | Hammer: {hammer} | ShootingStar: {shooting_star}")
 
     signal = None
     sl = tp = None
-    limit_price = None
 
-    # استراتژی: کراس 1 ساعته + تایید 15 دقیقه + صبر برای پولبک
-    if cross_long_1h and trend_long_15m:
-        # شرط پولبک: قیمت نباید بیشتر از نیم برابر ATR از EMA9 فاصله گرفته باشد
-        if current_price <= ema9_15m + (atr * 0.5):
+    # شرط LONG: روند 4 ساعته صعودی + الگوی بولیش در 15 دقیقه
+    if trend_long_4h:
+        if bullish_engulfing or is_strong_bullish or hammer:
             signal = "LONG"
-            limit_price = ema9_15m
-            sl = limit_price - (atr * 1.5)
-            tp = limit_price + (atr * 3.0)
+            sl = entry_price - (atr * 2.0)
+            tp = entry_price + (atr * 4.0)
 
-    elif cross_short_1h and trend_short_15m:
-        if current_price >= ema9_15m - (atr * 0.5):
+    # شرط SHORT: روند 4 ساعته نزولی + الگوی بیریش در 15 دقیقه
+    elif trend_short_4h:
+        if bearish_engulfing or is_strong_bearish or shooting_star:
             signal = "SHORT"
-            limit_price = ema9_15m
-            sl = limit_price + (atr * 1.5)
-            tp = limit_price - (atr * 3.0)
+            sl = entry_price + (atr * 2.0)
+            tp = entry_price - (atr * 4.0)
 
-    return signal, current_price, limit_price, sl, tp, atr
+    return signal, entry_price, sl, tp, atr
 
 def format_number(value):
-    if value >= 1000:
-        return f"{value:.2f}"
-    elif value >= 1:
-        return f"{value:.4f}"
-    else:
-        return f"{value:.6f}"
+    if value >= 1000: return f"{value:.2f}"
+    elif value >= 1: return f"{value:.4f}"
+    else: return f"{value:.6f}"
 
 # --- اجرای اصلی ---
 if __name__ == "__main__":
     print("=" * 50)
-    print("Starting V20 bot cycle (Pullback Strategy)...")
+    print("Starting V20 bot cycle (Price Action)...")
 
     send_heartbeat()
     print("✅ V20 Heartbeat sent.")
@@ -278,9 +257,8 @@ if __name__ == "__main__":
     update_open_trades(exchange)
     signals_data = load_signals()
 
-    # فیلتر بیت‌کوین 1 ساعته
-    btc_trend = get_btc_1h_trend(exchange)
-    print(f"🌍 BTC 1H Trend: {btc_trend}")
+    btc_trend_4h, btc_trend_1h = get_btc_trend(exchange)
+    print(f"🌍 BTC 4H Trend: {btc_trend_4h} | BTC 1H Trend: {btc_trend_1h}")
 
     signals_sent_this_cycle = 0
 
@@ -292,14 +270,18 @@ if __name__ == "__main__":
                 print(f"⏳ {symbol} has an OPEN trade. Skipping.")
                 continue
 
-            signal, current_price, limit_price, sl, tp, atr = analyze(symbol, exchange)
+            signal, entry, sl, tp, atr = analyze(symbol, exchange)
 
             if signal is None:
-                print(f"{symbol} | Price: {current_price:.4f} | No valid setup or waiting for pullback.")
+                print(f"{symbol} | Price: {entry} | No candle pattern.")
                 continue
 
-            if btc_trend != "UNKNOWN" and btc_trend != "NONE" and signal != btc_trend:
-                print(f"🚫 {symbol} signal {signal} rejected. BTC 1H trend is {btc_trend}.")
+            # فیلتر بیت‌کوین
+            if btc_trend_4h != "UNKNOWN" and btc_trend_4h != "NONE" and signal != btc_trend_4h:
+                print(f"🚫 {symbol} signal {signal} rejected. BTC 4H trend is {btc_trend_4h}.")
+                continue
+            if btc_trend_1h != "UNKNOWN" and btc_trend_1h != "NONE" and signal != btc_trend_1h:
+                print(f"🚫 {symbol} signal {signal} rejected. BTC 1H trend is {btc_trend_1h}.")
                 continue
 
             if signals_sent_this_cycle >= MAX_SIGNALS_PER_CYCLE:
@@ -307,17 +289,16 @@ if __name__ == "__main__":
                 continue
 
             if signal == "LONG":
-                rr = (tp - limit_price) / (limit_price - sl)
+                rr = (tp - entry) / (entry - sl)
                 emoji = "🟢"
             else:
-                rr = (limit_price - tp) / (sl - limit_price)
+                rr = (entry - tp) / (sl - entry)
                 emoji = "🔴"
 
-            msg = f"""{emoji} [V20] سیگنال {signal} (Pullback)
+            msg = f"""{emoji} [V20] سیگنال {signal} (Price Action)
 ━━━━━━━━━━━━━━━━━
 📌 نماد: {symbol}
-💵 قیمت لحظه‌ای: {format_number(current_price)}
-🎯 قیمت لیمیت (ورود): {format_number(limit_price)}
+💰 قیمت ورود: {format_number(entry)}
 🎯 حد سود (TP): {format_number(tp)}
 🛑 حد ضرر (SL): {format_number(sl)}
 📊 نسبت R:R: 1:{rr:.1f}
@@ -332,7 +313,7 @@ if __name__ == "__main__":
             
             signals_data[symbol] = {
                 "direction": signal,
-                "entry": limit_price,
+                "entry": entry,
                 "tp": tp,
                 "sl": sl,
                 "status": "OPEN",
@@ -340,7 +321,7 @@ if __name__ == "__main__":
             }
             save_signals(signals_data)
             signals_sent_this_cycle += 1
-            print(f"✅ {signal} signal for {symbol} sent! Limit: {limit_price} ({signals_sent_this_cycle}/{MAX_SIGNALS_PER_CYCLE})")
+            print(f"✅ {signal} signal for {symbol} sent! ({signals_sent_this_cycle}/{MAX_SIGNALS_PER_CYCLE})")
 
         except Exception as e:
             print(f"⚠️ خطا در {symbol}: {e}")
