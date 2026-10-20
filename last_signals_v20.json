@@ -1,1 +1,1 @@
-{}
+{"BTC-SWAP-USDT": {"direction": "LONG", "entry": 82700.0, "tp": 83258.08571428571, "sl": 82420.95714285715, "status": "OPEN", "time": "2026-10-20T20:34:11.292460"}, "ETH-SWAP-USDT": {"direction": "LONG", "entry": 2442.52, "tp": 2470.7542857142853, "sl": 2428.402857142857, "status": "OPEN", "time": "2026-10-20T20:34:12.867893"}, "SOL-SWAP-USDT": {"direction": "LONG", "entry": 106.45, "tp": 108.06142857142858, "sl": 105.64428571428572, "status": "OPEN", "time": "2026-10-20T20:34:13.664479"}}
