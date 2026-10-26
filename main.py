@@ -196,6 +196,11 @@ def analyze(symbol, exchange):
     entry_price = last['close']
     atr = last['atr']
 
+    # فیلتر حجم
+    avg_volume = df_15m['volume'].rolling(window=20).mean().iloc[-1]
+    current_volume = df_15m['volume'].iloc[-1]
+    volume_condition = current_volume > avg_volume
+
     # تشخیص روند 4 ساعته (برای تاییدیه)
     trend_long_4h = last_4h['ema9'] > last_4h['ema21']
     trend_short_4h = last_4h['ema9'] < last_4h['ema21']
@@ -217,25 +222,26 @@ def analyze(symbol, exchange):
 
     print(f"  [DEBUG 4H] Trend: {'LONG' if trend_long_4h else 'SHORT'}")
     print(f"  [DEBUG 15m] BullEngulf: {bullish_engulfing} | BearEngulf: {bearish_engulfing} | Hammer: {hammer} | ShootingStar: {shooting_star}")
+    print(f"  [DEBUG Vol] Current: {current_volume:.2f} | Avg: {avg_volume:.2f} | VolOK: {volume_condition}")
 
     signal = None
     sl = tp = None
 
-    # شرط LONG: روند 4 ساعته صعودی + الگوی بولیش در 15 دقیقه
+    # شرط LONG: روند 4 ساعته صعودی + الگوی بولیش + حجم کافی
     if trend_long_4h:
-        if bullish_engulfing or is_strong_bullish or hammer:
+        if (bullish_engulfing or is_strong_bullish or hammer) and volume_condition:
             signal = "LONG"
-            sl = entry_price - (atr * 2.0)
-            tp = entry_price + (atr * 4.0)
+            sl = entry_price - (atr * 1.5)
+            tp = entry_price + (atr * 3.0)
 
-    # شرط SHORT: روند 4 ساعته نزولی + الگوی بیریش در 15 دقیقه
+    # شرط SHORT: روند 4 ساعته نزولی + الگوی بیریش + حجم کافی
     elif trend_short_4h:
-        if bearish_engulfing or is_strong_bearish or shooting_star:
+        if (bearish_engulfing or is_strong_bearish or shooting_star) and volume_condition:
             signal = "SHORT"
-            sl = entry_price + (atr * 2.0)
-            tp = entry_price - (atr * 4.0)
+            sl = entry_price + (atr * 1.5)
+            tp = entry_price - (atr * 3.0)
 
-    return signal, entry_price, sl, tp, atr
+    return signal, entry_price, sl, tp, atr, volume_condition
 
 def format_number(value):
     if value >= 1000: return f"{value:.2f}"
@@ -245,7 +251,7 @@ def format_number(value):
 # --- اجرای اصلی ---
 if __name__ == "__main__":
     print("=" * 50)
-    print("Starting V20 bot cycle (Price Action)...")
+    print("Starting V20 bot cycle (Price Action + Volume)...")
 
     send_heartbeat()
     print("✅ V20 Heartbeat sent.")
@@ -270,10 +276,10 @@ if __name__ == "__main__":
                 print(f"⏳ {symbol} has an OPEN trade. Skipping.")
                 continue
 
-            signal, entry, sl, tp, atr = analyze(symbol, exchange)
+            signal, entry, sl, tp, atr, vol_ok = analyze(symbol, exchange)
 
             if signal is None:
-                print(f"{symbol} | Price: {entry} | No candle pattern.")
+                print(f"{symbol} | Price: {entry} | No valid setup (or volume low).")
                 continue
 
             # فیلتر بیت‌کوین
@@ -303,6 +309,7 @@ if __name__ == "__main__":
 🛑 حد ضرر (SL): {format_number(sl)}
 📊 نسبت R:R: 1:{rr:.1f}
 📉 ATR: {format_number(atr)}
+📊 Volume: {current_volume:.2f} (Avg: {avg_volume:.2f})
 ━━━━━━━━━━━━━━━━━
 📅 تاریخ شمسی: {date_jalali}
 📅 تاریخ میلادی: {date_gregorian}
